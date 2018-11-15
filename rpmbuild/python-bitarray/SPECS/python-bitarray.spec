@@ -10,7 +10,7 @@ Summary: efficient arrays of booleans -- C extension
 Group: System Environment/Libraries
 License: Python Software Foundation License
 URL: http://cheeseshop.python.org/pypi/bitarray
-Source: http://pypi.python.org/packages/source/b/%{srcname}/%{srcname}-%{version}.tar.gz
+Source: https://pypi.python.org/packages/source/b/%{srcname}/%{srcname}-%{version}.tar.gz
 
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 

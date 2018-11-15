@@ -50,7 +50,6 @@ This package provides the Haskell %{pkg_name} library development files.
 %install
 %ghc_lib_install
 
-
 %post devel
 %ghc_pkg_recache
 
@@ -61,6 +60,7 @@ This package provides the Haskell %{pkg_name} library development files.
 
 %files -f %{name}.files
 %doc LICENSE
+/usr/share/licenses/%{name}-%{version}/LICENSE
 
 
 %files devel -f %{name}-devel.files

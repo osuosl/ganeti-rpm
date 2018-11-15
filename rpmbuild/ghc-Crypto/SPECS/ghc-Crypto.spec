@@ -25,6 +25,7 @@ BuildRequires:  ghc-rpm-macros %{!?without_hscolour:hscolour}
 
 BuildRequires:  ghc-compiler
 BuildRequires:  ghc-HUnit-devel
+BuildRequires:  ghc-QuickCheck-devel
 
 %description
 %{common_description}
@@ -72,6 +73,7 @@ This package provides the Haskell %{pkg_name} library development files.
 
 %files -f %{name}.files
 %doc ReadMe.tex
+/usr/share/licenses/%{name}-%{version}/ReadMe.tex
 
 
 %files devel -f %{name}-devel.files

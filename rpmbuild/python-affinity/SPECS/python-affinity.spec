@@ -10,7 +10,7 @@ Summary: affinity - control processor affinity on windows and linux
 Group: System Environment/Libraries
 License: Python Software Foundation License
 URL: http://cheeseshop.python.org/pypi/affinity
-Source: http://pypi.python.org/packages/source/a/%{srcname}/%{srcname}-%{version}.tar.gz
+Source: https://pypi.python.org/packages/source/a/%{srcname}/%{srcname}-%{version}.tar.gz
 
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
