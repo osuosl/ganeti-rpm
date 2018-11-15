@@ -16,13 +16,13 @@
 
 Name: ganeti
 Version: 2.11.8
-Release: 2%{?dist}
+Release: 3%{?dist}
 Group: System Environment/Daemons
 Summary: Cluster virtual server management software
 License: BSD-2-Clause
 URL: http://code.google.com/p/ganeti/
 
-Source0: http://ganeti.googlecode.com/files/ganeti-%{version}.tar.gz
+Source0: http://downloads.ganeti.org/releases/2.11/ganeti-%{version}.tar.gz
 Source1: ganeti.init
 Source2: ganeti.logrotate
 Source3: ganeti.sysconfig
@@ -31,11 +31,15 @@ BuildRoot: %{_tmppath}/%{name}-root
 
 Patch1: ganeti-2.11.6-sshd-service.patch
 Patch2: ganeti-2.11.8-fix-parse-drbd-version.patch
+Patch3: ganeti-2.11.8-watcher-change-watcher-generated-job-archival-strate.patch
 
+BuildRequires: iproute
+BuildRequires: m4
+BuildRequires: pcre-devel
 BuildRequires: python
 BuildRequires: pyOpenSSL
 BuildRequires: pyparsing
-BuildRequires: python-affinity 
+BuildRequires: python-affinity
 BuildRequires: python-bitarray
 BuildRequires: python-inotify
 BuildRequires: python-ipaddr
@@ -110,6 +114,7 @@ and simple recovery after physical failures using commodity hardware.
 
 %patch1 -p1
 %patch2 -p1
+%patch3 -p1
 
 %build
 %configure \

@@ -1,0 +1,132 @@
+From 0573b7e8316f5fb28647d14f8e68466bd82e05a9 Mon Sep 17 00:00:00 2001
+From: Apollon Oikonomopoulos <apoikos@debian.org>
+Date: Thu, 30 Aug 2018 14:18:34 +0300
+Subject: [PATCH] watcher: change watcher-generated job archival strategy
+
+Currently the watcher spawns a single OP_GROUP_VERIFY_DISKS job per
+node-group, which it archives as soon as it has finished (presumably to
+avoid polluting the job queue with internal jobs).
+
+Unfortunately this strategy is prone to a race that potentially leaves
+stale job files on all master candidates. The race comes down to the
+fact that ArchiveJob is called before the job has finished replicating
+to all master candidates, as these are two isolated threads of
+execution:
+
+ 1. The replication is triggered by the job code itself (via
+    UpdateJobUnlocked) after each write. The job code runs on a dedicated
+    process.
+
+ 2. Watcher waits for LuxiD to signal the job's completion, and LuxiD
+    does so by watching the job file on the master using inotify. There
+    is no locking involved and LuxiD will signal job completion as soon
+    as the file has been updated on the master, even though the updated
+    file has not hit all master candidates yet.
+
+There are a number of approaches to solving this issue, including:
+
+ - Marking these ephemeral jobs as non-replicatable. While there is a
+   provision to skip replicating jobs, it is not exposed to upper layers
+   (e.g. via an argument to SubmitJob).
+
+ - Introduce job-level locking between LuxiD and the job code. This is
+   probably too complicated and does not seem to be needed anywhere
+   else.
+
+Instead, we'll refactor the archival code to cleanup these jobs on the
+next watcher run. This is done by marking jobs as "bulk" using the
+reason trail and querying the queue for such jobs after they have
+finished. While this approach does not eliminate the race, it certainly
+reduces the window so that we don't expect any duplicate job files to
+emerge in real world scenarios.
+---
+ lib/watcher/__init__.py | 41 ++++++++++++++++++++++++++++++++++++++---
+ src/Ganeti/Constants.hs |  4 ++++
+ 2 files changed, 42 insertions(+), 3 deletions(-)
+
+diff --git a/lib/watcher/__init__.py b/lib/watcher/__init__.py
+index f21105d39..f0786e6da 100644
+--- a/lib/watcher/__init__.py
++++ b/lib/watcher/__init__.py
+@@ -341,11 +341,17 @@ def _VerifyDisks(cl, uuid, nodes, instances):
+   """Run a per-group "gnt-cluster verify-disks".
+ 
+   """
+-  job_id = cl.SubmitJob([opcodes.OpGroupVerifyDisks(
+-      group_name=uuid, priority=constants.OP_PRIO_LOW)])
++  op = opcodes.OpGroupVerifyDisks(
++    group_name=uuid, priority=constants.OP_PRIO_LOW)
++  op.reason = [(constants.OPCODE_REASON_SRC_WATCHER,
++                "Verifying disks of group %s" % uuid,
++                utils.EpochNano()),
++               (constants.OPCODE_REASON_SRC_WATCHER,
++                constants.OPCODE_REASON_WATCHER_BULK,
++                utils.EpochNano())]
++  job_id = cl.SubmitJob([op])
+   ((_, offline_disk_instances, _), ) = \
+     cli.PollJob(job_id, cl=cl, feedback_fn=logging.debug)
+-  cl.ArchiveJob(job_id)
+ 
+   if not offline_disk_instances:
+     # nothing to do
+@@ -623,6 +629,34 @@ def _StartGroupChildren(cl, wait):
+       logging.debug("Child PID %s exited with status %s", pid, result)
+ 
+ 
++def _ArchiveWatcherBulkJobs(cl):
++  """Archives watcher bulk jobs
++
++  """
++  archived = 0
++  results = cl.Query(constants.QR_JOB, ["id", "ops", "status"], None)
++
++  def _IsBulk(opcode):
++    for source, reason, _ in opcode.get('reason', []):
++      if source == constants.OPCODE_REASON_SRC_WATCHER and \
++         reason == constants.OPCODE_REASON_WATCHER_BULK:
++        return True
++    return False
++
++  for job_data in results.data:
++    jid, opcodes, status = [v[1] for v in job_data]
++    if status != constants.JOB_STATUS_SUCCESS:
++      # Leave unsuccessful jobs unarchived
++      continue
++
++    if any(_IsBulk(opcode) for opcode in opcodes):
++      cl.ArchiveJob(jid)
++      archived += 1
++      continue
++
++  logging.debug("Archived %s bulk watcher jobs", archived)
++
++
+ def _ArchiveJobs(cl, age):
+   """Archives old jobs.
+ 
+@@ -679,6 +713,7 @@ def _GlobalWatcher(opts):
+ 
+   _CheckMaster(client)
+   _ArchiveJobs(client, opts.job_age)
++  _ArchiveWatcherBulkJobs(client)
+ 
+   # Spawn child processes for all node groups
+   _StartGroupChildren(query_client, opts.wait_children)
+diff --git a/src/Ganeti/Constants.hs b/src/Ganeti/Constants.hs
+index 61723e470..78ab6b768 100644
+--- a/src/Ganeti/Constants.hs
++++ b/src/Ganeti/Constants.hs
+@@ -4362,6 +4362,10 @@ opcodeReasonSources =
+                        opcodeReasonSrcRlib2,
+                        opcodeReasonSrcUser]
+ 
++-- * Well-known reason strings
++opcodeReasonWatcherBulk :: String
++opcodeReasonWatcherBulk = "watcher:bulk"
++
+ -- | Path generating random UUID
+ randomUuidFile :: String
+ randomUuidFile = ConstantUtils.randomUuidFile
+-- 
+2.11.0
+
