@@ -38,6 +38,7 @@ PACKAGES="${GANETI_DEPENDS_PACKAGES1}
 PACKAGER="$(basename "${0}")"
 PACKAGER_DIR="$(cd "$(dirname "${0}")" && echo "${PWD}")"
 PACKAGER_RPM_DIR="${PACKAGER_DIR}/rpmbuild"
+PACKAGER_REPO_DIR="${PACKAGER_DIR}/repo"
 
 # RPM macros
 RPM_DIST=$(egrep "\%dist" /etc/rpm/macros.dist | awk '{ print $2 }' | sed -E 's|^(\..*)\..*|\1|')
@@ -77,6 +78,8 @@ Usage:
         -C Completely clean the rpmbuild directory.
 
         -l List ghc dependencies in target packages.
+
+        -m Build using mock
 
 _EOF_
 }
@@ -141,6 +144,7 @@ clean_all() {
     echo "Cleaning Everything..."
     rm -rf "${PACKAGER_RPM_DIR}"/*/{BUILD,BUILDROOT,RPMS,SRPMS}
     rm -f "${PACKAGER_RPM_DIR}"/*/SOURCES/*.{gz,bz2}
+    rm -rf "${PACKAGER_REPO_DIR}"
 }
 
 # Uninstall packages
@@ -182,14 +186,17 @@ install_package() {
 
 # Build packages
 build_package() {
+    mkdir -p ${PACKAGER_REPO_DIR}/{SRPMS,RPMS}
     for PACKAGE in ${@}; do
         echo "Building package for ${PACKAGE}..."
         pushd "${PACKAGER_RPM_DIR}/${PACKAGE}"
         check_oldpackage "${PACKAGE}"
         local PACKAGE_SPEC_FILE="SPECS/${PACKAGE}.spec"
         if [ "${is_overwrite}" = "y" ]; then
-            # Install build dependencies
-            yum-builddep -y "${PACKAGE_SPEC_FILE}"
+            if [ "${MOCK}" = "no" ] ; then
+              # Install build dependencies
+              yum-builddep -y "${PACKAGE_SPEC_FILE}"
+            fi
 
             # Download source and patch files
             if [ ! -d SOURCES ]; then
@@ -197,16 +204,31 @@ build_package() {
             fi
             spectool -g -A "${PACKAGE_SPEC_FILE}" -C SOURCES/
 
-            # Build package
-            rpmbuild \
-                --define "%_topdir ${PACKAGER_RPM_DIR}/${PACKAGE}" \
-                --define "%dist ${RPM_DIST}" \
-                -ba "${PACKAGE_SPEC_FILE}"
+            if [ "${MOCK}" = "yes" ] ; then
+              # Build srpm
+              rpmbuild \
+                  --define "%_topdir ${PACKAGER_RPM_DIR}/${PACKAGE}" \
+                  --define "%dist ${RPM_DIST}" \
+                  -bs "${PACKAGE_SPEC_FILE}"
+
+              # Build package using mock
+              mock --rebuild -r epel-7-x86_64 --localrepo=${PACKAGER_REPO_DIR} \
+                ${PACKAGER_RPM_DIR}/${PACKAGE}/SRPMS/*rpm
+              mv -v /var/lib/mock/epel-7-x86_64/result/*src.rpm ${PACKAGER_REPO_DIR}/SRPMS/
+              mv -v /var/lib/mock/epel-7-x86_64/result/*.rpm ${PACKAGER_REPO_DIR}/RPMS/
+              createrepo_c ${PACKAGER_REPO_DIR}/RPMS/
+            else
+              # Build package
+              rpmbuild \
+                  --define "%_topdir ${PACKAGER_RPM_DIR}/${PACKAGE}" \
+                  --define "%dist ${RPM_DIST}" \
+                  -ba "${PACKAGE_SPEC_FILE}"
+            fi
 
         fi
 
         # Install packages
-        if [ "${INSTALL_MODE}" = "yes" ]; then
+        if [ "${INSTALL_MODE}" = "yes" -a "${MOCK}" = "no"]; then
             install_package ${PACKAGE}
         fi
 
@@ -216,25 +238,30 @@ build_package() {
 }
 
 sign_package() {
-    for PACKAGE in ${@}; do
-        echo "Signing package for ${PACKAGE}..."
-        pushd "${PACKAGER_RPM_DIR}/${PACKAGE}"
+    if [ "${MOCK}" = "yes" ] ; then
+        rpm --addsign ${PACKAGER_REPO_DIR}/RPMS/*.rpm
+        createrepo_c ${PACKAGER_REPO_DIR}/RPMS/
+    else
+      for PACKAGE in ${@}; do
+          echo "Signing package for ${PACKAGE}..."
+          pushd "${PACKAGER_RPM_DIR}/${PACKAGE}"
 
-        SIGN_RPM_LIST=""
-        RPM_FILE_LIST=$(find SRPMS RPMS -name "*.rpm")
-        for RPM_FILE in ${RPM_FILE_LIST}; do
-            IS_SIGNED=$(rpm -K "${RPM_FILE}" | grep -i "(md5) pgp" | wc -l)
-            if [ "${IS_SIGNED}" -eq 0 ]; then
-                SIGN_RPM_LIST="${SIGN_RPM_LIST} ${RPM_FILE}"
-            else
-                echo "Skip sign: ${RPM_FILE} is already signed."
-            fi
-        done
-        [ ! -z "${SIGN_RPM_LIST}" ] && rpm --addsign ${SIGN_RPM_LIST}
+          SIGN_RPM_LIST=""
+          RPM_FILE_LIST=$(find SRPMS RPMS -name "*.rpm")
+          for RPM_FILE in ${RPM_FILE_LIST}; do
+              IS_SIGNED=$(rpm -K "${RPM_FILE}" | grep -i "(md5) pgp" | wc -l)
+              if [ "${IS_SIGNED}" -eq 0 ]; then
+                  SIGN_RPM_LIST="${SIGN_RPM_LIST} ${RPM_FILE}"
+              else
+                  echo "Skip sign: ${RPM_FILE} is already signed."
+              fi
+          done
+          [ ! -z "${SIGN_RPM_LIST}" ] && rpm --addsign ${SIGN_RPM_LIST}
 
-        echo
-        popd
-    done
+          echo
+          popd
+      done
+    fi
 }
 
 ghc_dependency_list() {
@@ -263,7 +290,8 @@ main() {
     CLEAN_MODE="no"
     OVERWRITE_MODE="manual"
     GHC_DEPENDENCY_LIST="no"
-    while getopts siuadpcCo:l OPT; do
+    MOCK="no"
+    while getopts siuadpcCo:lm OPT; do
         case "${OPT}" in
             "s" )
                 SIGN_MODE="yes"
@@ -286,6 +314,8 @@ main() {
                 OVERWRITE_MODE="${OPTARG}" ;;
             "l" )
                 GHC_DEPENDENCY_LIST="yes" ;;
+            "m" )
+                MOCK="yes" ;;
             * )
                 usage
                 exit 1
